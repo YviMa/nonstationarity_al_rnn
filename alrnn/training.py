@@ -224,7 +224,7 @@ def train_alrnn(train_data, M, P, num_epochs=500, batch_size=8,
                 device='cpu', verbose=False, model=None,
                 forcing_mode='gtf', external_inputs=None,
                 weight_decay=1e-5, switch_lambda=0.0, pwl_timescale=None,
-                timescale_lambda=0.0,
+                timescale_lambda=0.0, incoming_lambda=0.0,
                 epoch_callback=None, callback_every=100):
     """Train an AL-RNN model on a single subject's time series.
 
@@ -287,6 +287,13 @@ def train_alrnn(train_data, M, P, num_epochs=500, batch_size=8,
         the L2 deviation of A[-P:] from pwl_timescale, keeping the slow time
         scale during training.  Requires pwl_timescale to be set.  Has no
         effect when P == 0 or pwl_timescale is None.
+    incoming_lambda : float
+        Weight for the incoming-weight regularisation on PWL units (default 0 =
+        off).  Penalises W[-P:, :] (the P rows of W that drive the PWL units'
+        pre-activation states) toward zero, keeping the PWL units as slow
+        integrators rather than reactive units.  The outgoing weights W[:, -P:]
+        (columns) are NOT penalised — those carry the switch signal to the rest
+        of the network and should remain free.  Has no effect when P == 0.
     epoch_callback : callable or None
         If provided, called as ``epoch_callback(model, epoch)`` after every
         ``callback_every`` epochs (and at the final epoch).  The model is
@@ -395,6 +402,8 @@ def train_alrnn(train_data, M, P, num_epochs=500, batch_size=8,
                 loss = loss_fn(z_hat, y)
             if timescale_lambda > 0.0 and pwl_timescale is not None and model.P > 0:
                 loss = loss + timescale_lambda * (model.A[-model.P:] - pwl_timescale).pow(2).mean()
+            if incoming_lambda > 0.0 and model.P > 0:
+                loss = loss + incoming_lambda * model.W[-model.P:, :].pow(2).mean()
             loss.backward()
             optimizer.step()
             epoch_losses.append(loss.item())

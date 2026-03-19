@@ -36,10 +36,10 @@ CONFIG = {
     "data_type": "sinusoid",   # "sinusoid" | "var"
 
     # --- shared data params ------------------------------------------------
-    "n_nodes": 5,
-    "n_switches": 3,
-    "switch_strength": 0.7,    # 0 = no change, 1 = fully new
-    "segment_lengths": [300, 300,300, 300],
+    "n_nodes": 3,
+    "n_switches": 1,
+    "switch_strength": 0.5,    # 0 = no change, 1 = fully new
+    "segment_lengths": [200,200],
     "noise_std": 0.00,
     "random_seed": 42,
 
@@ -53,14 +53,14 @@ CONFIG = {
 
     # --- temporal external input -------------------------------------------
     "use_temporal_input": True,
-    "temporal_input_mode": "fourier",   # 'none' | 'linear' | 'fourier'
+    "temporal_input_mode": "linear",   # 'none' | 'linear' | 'fourier'
 
     # --- model -------------------------------------------------------------
     # ITF: M must be >= N + P; the last M-N units evolve freely (true memory).
     # GTF: only M=N is meaningful — obs_to_latent re-initialises all extra units
     #      from the current observation at every step, so M>N adds no recurrence.
     "M": 20,   # for ITF with N=2, P=2: M >= 4; extra units give free latent memory
-    "P": 3,
+    "P": 1,
 
     # --- training ----------------------------------------------------------
     # sequence_length should cover ≥ 2 full cycles of the slowest frequency.
@@ -71,7 +71,7 @@ CONFIG = {
     "alpha": 1.0,
     "end_alpha": 1.0,
     # n_interleave: apply teacher forcing every this many steps.
-    "n_interleave": 10,
+    "n_interleave": 1,
     "start_lr": 1e-3,
     "end_lr": 1e-4,
     "batches_per_epoch": 10,

@@ -85,6 +85,7 @@ def plot_alignment(
     bitcodes: np.ndarray,
     n_pwl_units: int,
     pwl_states: np.ndarray = None,
+    max_nodes: int = None,
     save_path: str = "alignment.png",
     show: bool = False,
 ) -> None:
@@ -108,10 +109,16 @@ def plot_alignment(
     pwl_states : ndarray of shape (T, P) or None
         Pre-activation values of the P PWL units at every step.  When
         provided, P extra panels are appended below the observation rows.
+    max_nodes : int or None
+        Maximum number of observation panels to plot.  When None all N nodes
+        are shown.  Useful for high-dimensional data (e.g. EMA with 22 items).
     save_path : str
     show : bool
     """
     T, N = time_series.shape
+    N = N if max_nodes is None else min(N, max_nodes)
+    time_series         = time_series[:, :N]
+    generated_trajectory = generated_trajectory[:, :N]
     P = 0 if pwl_states is None else pwl_states.shape[1]
     n_rows = N + P
 
@@ -170,16 +177,13 @@ def plot_alignment(
         Line2D([0], [0], color="steelblue",    lw=1.5, label="observed"),
         Line2D([0], [0], color="coral",        lw=1.5, label="AL-RNN"),
         Line2D([0], [0], color="mediumpurple", lw=1.5, label="PWL (pre-ReLU)"),
-        Line2D([0], [0], color="black", lw=1.1, linestyle="--", label="GT switch"),
     ]
+    if len(switch_times) > 0:
+        legend_handles.append(
+            Line2D([0], [0], color="black", lw=1.1, linestyle="--", label="GT switch")
+        )
     axes[0].legend(handles=legend_handles, loc="upper right",
                    fontsize=8, framealpha=0.7)
-
-    fig.suptitle(
-        f"Switching VAR  |  {n_codes} unique bitcode(s) observed  "
-        f"(P={n_pwl_units} ReLU unit{'s' if n_pwl_units != 1 else ''})",
-        fontsize=10, y=1.01,
-    )
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     if show:
         plt.show()
