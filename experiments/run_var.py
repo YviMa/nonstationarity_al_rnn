@@ -61,8 +61,8 @@ CONFIG = {
     # --- data ---------------------------------------------------------------
     # n_nodes must be even >= 4 for structured scenarios
     "n_nodes": 6,
-    "segment_lengths": [200, 800],
-    "noise_std": 0.1,
+    "segment_lengths": [300, 300],
+    "noise_std": 0.05,
     "random_seed": 42,
 
     # --- scenario-specific params -------------------------------------------
@@ -76,10 +76,10 @@ CONFIG = {
 
     # critical_slowing: spectral radii for the two segments
     "sr_low":  0.8,
-    "sr_high": 0.97,
+    "sr_high": 0.95,
 
     # random: interpolation strength between consecutive matrices (0=no change)
-    "switch_strength": 0.5,
+    "switch_strength": 0.3,
 
     # all scenarios: number of complex-conjugate eigenvalue pairs (None = n//2)
     "n_oscillation_modes": None,
@@ -89,13 +89,13 @@ CONFIG = {
     "temporal_input_mode": "linear",   # 'none' | 'linear' | 'fourier'
 
     # --- model ---------------------------------------------------------------
-    "M": 20,
-    "P": 2,
+    "M": 30,
+    "P": 1,
 
     # --- training ------------------------------------------------------------
     "num_epochs": 300,
     "batch_size": 16,
-    "sequence_length": 50,
+    "sequence_length": 75,
     "alpha": 1.0,
     "end_alpha": 1.0,
     # Apply teacher forcing every n_interleave steps (1 = every step).
@@ -109,9 +109,9 @@ CONFIG = {
     "verbose": True,
 
     # --- regularisation ------------------------------------------------------
-    "switch_lambda": 0.0,
+    "switch_lambda": 0.0000,
     "pwl_timescale": 0.97,
-    "timescale_lambda": 0.01,
+    "timescale_lambda": 0.001,
     # L2 penalty on W[-P:, :] (incoming weights to PWL units) toward 0.
     # Keeps PWL units as slow integrators; outgoing W[:, -P:] stays free.
     "incoming_lambda": 0.01,
@@ -324,6 +324,25 @@ def main(cfg: dict = CONFIG) -> None:
         save_path=dist_path,
         show=True,
     )
+
+    # ------------------------------------------------------------------
+    # 8. Save model + run metadata
+    # ------------------------------------------------------------------
+    model_path = fig_path.replace("_alignment.png", "_model.pt")
+    torch.save({
+        "model_state_dict": model.state_dict(),
+        "M": model.M, "P": model.P, "N": model.N, "d_input": model.d_input,
+        "config":          cfg,
+        "mean":            mean.tolist(),
+        "std":             std.tolist(),
+        "switch_times":    switch_times.tolist(),
+        "segment_ids":     segment_ids.tolist(),
+        "train_series":    train_series,
+        "time_series":     time_series,
+        "external_inputs": external_inputs,
+        "scenario":        scenario,
+    }, model_path)
+    print(f"\n  Model saved → {model_path}")
 
 
 # ---------------------------------------------------------------------------

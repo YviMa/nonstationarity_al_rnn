@@ -35,14 +35,14 @@ from analysis.consistency import bitcode_consistency
 # ---------------------------------------------------------------------------
 CONFIG = {
     # --- data ----------------------------------------------------------------
-    "n_nodes": 5,
+    "n_nodes": 2,
     "n_switches": 1,
     # How much frequencies change at each switch: 0 = identical, 1 = fully new.
-    "switch_strength": 0.3,
+    "switch_strength": 0.6,
     "segment_lengths": [200, 200],
     "n_components": 3,           # sinusoidal components per node
-    "freq_range": [0.05, 0.2],   # cycles/sample → periods 5–20 steps
-    "noise_std": 0.0,
+    "freq_range": [0.1, 0.2],   # cycles/sample → periods 5–20 steps
+    "noise_std": 0.05,
     "random_seed": 42,
 
     # --- temporal external input --------------------------------------------
@@ -51,7 +51,7 @@ CONFIG = {
 
     # --- model ---------------------------------------------------------------
     "M": 20,
-    "P": 1,
+    "P": 2,
 
     # --- training ------------------------------------------------------------
     "num_epochs": 300,
@@ -60,7 +60,7 @@ CONFIG = {
     "alpha": 1.0,
     "end_alpha": 1.0,
     # Apply teacher forcing every n_interleave steps (1 = every step).
-    "n_interleave": 4,
+    "n_interleave": 3,
     "start_lr": 1e-3,
     "end_lr": 1e-3,
     "batches_per_epoch": 10,
@@ -71,17 +71,17 @@ CONFIG = {
     # --- regularisation ------------------------------------------------------
     "switch_lambda": 0.0,
     "pwl_timescale": 0.95,
-    "timescale_lambda": 0.0,
-    "incoming_lambda": 0.0,
+    "timescale_lambda": 0.001,
+    "incoming_lambda": 1.,
 
     # --- output --------------------------------------------------------------
     "figure_path": "sinusoid_results/alignment.png",
     # Mid-training alignment plots every N epochs (None = only at the end).
-    "plot_every": 200,
+    "plot_every": 100,
 
     # --- consistency ---------------------------------------------------------
     # Number of independent runs for ARI consistency scoring (1 = disabled).
-    "n_runs": 3,
+    "n_runs": 1,
 }
 
 
@@ -270,6 +270,29 @@ def main(cfg: dict = CONFIG) -> None:
         save_path=dist_path,
         show=True,
     )
+
+    # ------------------------------------------------------------------
+    # 8. Save model + run metadata
+    # ------------------------------------------------------------------
+    fr = cfg["freq_range"]
+    ss = cfg["switch_strength"]
+    model_tag  = f"_ss{ss}_fr{fr[0]}-{fr[1]}"
+    model_path = cfg["figure_path"].replace(".png", f"{model_tag}_model.pt")
+    torch.save({
+        "model_state_dict": model.state_dict(),
+        "M": model.M, "P": model.P, "N": model.N, "d_input": model.d_input,
+        "config":          cfg,
+        "mean":            mean.tolist(),
+        "std":             std.tolist(),
+        "switch_times":    switch_times.tolist(),
+        "segment_ids":     segment_ids.tolist(),
+        "train_series":    train_series,
+        "time_series":     time_series,
+        "external_inputs": external_inputs,
+        "switch_strength": ss,
+        "freq_range":      fr,
+    }, model_path)
+    print(f"\n  Model saved → {model_path}")
 
 
 if __name__ == "__main__":
