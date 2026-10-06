@@ -17,8 +17,7 @@ linear dynamical systems.
 
 ## Temporal input
 
-The temporal feature `u_t` is never observed or predicted; it only drives the
-latent dynamics. How it is provided is controlled by three config keys
+The temporal feature `u_t` drives the latent dynamics but is not used for prediction. How it is provided is controlled by three config keys
 (see the `CONFIG` dict in each run file):
 
 ```python
