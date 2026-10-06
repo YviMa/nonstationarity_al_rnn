@@ -225,6 +225,9 @@ def train_alrnn(train_data, M, P, num_epochs=500, batch_size=8,
                 forcing_mode='gtf', external_inputs=None,
                 weight_decay=1e-5, switch_lambda=0.0, pwl_timescale=None,
                 timescale_lambda=0.0, incoming_lambda=0.0,
+                temporal_input_target='all',
+                pwl_state_lambda=0.0,
+                P_switch=None,
                 epoch_callback=None, callback_every=100):
     """Train an AL-RNN model on a single subject's time series.
 
@@ -287,6 +290,19 @@ def train_alrnn(train_data, M, P, num_epochs=500, batch_size=8,
         the L2 deviation of A[-P:] from pwl_timescale, keeping the slow time
         scale during training.  Requires pwl_timescale to be set.  Has no
         effect when P == 0 or pwl_timescale is None.
+    temporal_input_target : str
+        Controls which units receive the temporal external input.
+        'all'           — project u_t onto all M latent units via C (M×d_input).
+                          Default; reproduces previous behaviour exactly.
+        'pwl_only'      — project u_t only onto the P PWL unit pre-activations
+                          via a separate C_pwl (P×d_input).  Linear units carry
+                          no temporal signal.
+        'monotone_gate' — like 'pwl_only' but the projection is multiplied by a
+                          learned sigmoid gate σ(α·(u_t[0]−τ)) that biases
+                          toward a single clean transition.  α and τ are scalar
+                          nn.Parameters (init: α=5, τ=0.5).  Requires
+                          temporal_input_mode='linear' so that u_t[0]=t/(T−1).
+        Has no effect when d_input == 0 or P == 0.
     incoming_lambda : float
         Weight for the incoming-weight regularisation on PWL units (default 0 =
         off).  Penalises W[-P:, :] (the P rows of W that drive the PWL units'
@@ -294,6 +310,19 @@ def train_alrnn(train_data, M, P, num_epochs=500, batch_size=8,
         integrators rather than reactive units.  The outgoing weights W[:, -P:]
         (columns) are NOT penalised — those carry the switch signal to the rest
         of the network and should remain free.  Has no effect when P == 0.
+    P_switch : int or None
+        Number of slow-switching PWL units (last P_switch of the P units).
+        None (default) → P_switch = P, i.e. all P units are slow-switching
+        (fully backward-compatible).  The remaining P - P_switch units are
+        free PWL units that switch without restriction and receive no
+        regularization or temporal input.  See AL_RNN for full details.
+    pwl_state_lambda : float
+        Weight for the PWL pre-activation magnitude penalty (default 0 = off).
+        Penalises the mean squared value of h[-P:] across the training
+        subsequence: λ · mean(h[-P:]²).  This prevents the PWL units from
+        drifting far from the ReLU kink at 0 after a regime switch, keeping
+        sign transitions feasible throughout the sequence.  Has no effect when
+        P == 0.
     epoch_callback : callable or None
         If provided, called as ``epoch_callback(model, epoch)`` after every
         ``callback_every`` epochs (and at the final epoch).  The model is
@@ -334,14 +363,16 @@ def train_alrnn(train_data, M, P, num_epochs=500, batch_size=8,
             UserWarning, stacklevel=2,
         )
 
-    seq_len = min(sequence_length, len(train_data) - 1)
+    seq_len = len(train_data) - 1 if sequence_length is None else min(sequence_length, len(train_data) - 1)
     dataset = ALRNNDataset(train_data, external_inputs=external_inputs,
                            sequence_length=seq_len,
                            batch_size=batch_size, device=device)
 
     if model is None:
         model = AL_RNN(M=M, P=P, N=N, d_input=d_input,
-                       pwl_timescale=pwl_timescale).to(device)
+                       pwl_timescale=pwl_timescale,
+                       temporal_input_target=temporal_input_target,
+                       P_switch=P_switch).to(device)
     else:
         model = model.to(device)
 
@@ -370,7 +401,7 @@ def train_alrnn(train_data, M, P, num_epochs=500, batch_size=8,
         t = epoch / max(num_epochs - 1, 1)
         alpha_t = alpha + (_end_alpha - alpha) * t
 
-        collect_pwl = switch_lambda > 0.0 and model.P > 0
+        collect_pwl = (switch_lambda > 0.0 or pwl_state_lambda > 0.0) and model.P > 0
         epoch_losses = []
         epoch_switch_counts = []
         for _ in range(batches_per_epoch):
@@ -386,24 +417,32 @@ def train_alrnn(train_data, M, P, num_epochs=500, batch_size=8,
                                                     return_pwl_states=collect_pwl)
             if collect_pwl:
                 z_hat, pwl_states = result
-                # Scale-invariant event-based switch penalty.
-                # Normalise each value to ≈ ±1: s / (|s|.detach() + ε).
-                # Gradient ≈ 1/(|s|+ε) — largest near zero crossings.
-                # (norm_t - norm_{t+1})²/4 ≈ 1 at a sign crossing, ≈ 0 otherwise.
-                # Summed over time, averaged over batch and P → ≈ hard switch count.
-                norm_sign = pwl_states / (pwl_states.detach().abs() + 1e-6)
-                switch_count = (
-                    (norm_sign[:, :-1, :] - norm_sign[:, 1:, :]).pow(2) / 4.0
-                ).sum(dim=1).mean()
-                loss = loss_fn(z_hat, y) + switch_lambda * switch_count
-                epoch_switch_counts.append(switch_count.item())
+                loss = loss_fn(z_hat, y)
+                ps = model.P_switch  # shorthand; 0 means no slow units
+                if switch_lambda > 0.0 and ps > 0:
+                    # Scale-invariant event-based switch penalty — slow units only.
+                    # Normalise each value to ≈ ±1: s / (|s|.detach() + ε).
+                    # (norm_t - norm_{t+1})²/4 ≈ 1 at a sign crossing, ≈ 0 otherwise.
+                    sw_states = pwl_states[..., -ps:]
+                    norm_sign = sw_states / (sw_states.detach().abs() + 1e-6)
+                    switch_count = (
+                        (norm_sign[:, :-1, :] - norm_sign[:, 1:, :]).pow(2) / 4.0
+                    ).sum(dim=1).mean()
+                    loss = loss + switch_lambda * switch_count
+                    epoch_switch_counts.append(switch_count.item())
+                if pwl_state_lambda > 0.0 and ps > 0:
+                    # Penalise squared magnitude of slow-unit pre-activations.
+                    # Keeps h[-ps:] near the ReLU kink, preventing post-switch
+                    # divergence.  Free units are unaffected.
+                    loss = loss + pwl_state_lambda * pwl_states[..., -ps:].pow(2).mean()
             else:
                 z_hat = result
                 loss = loss_fn(z_hat, y)
-            if timescale_lambda > 0.0 and pwl_timescale is not None and model.P > 0:
-                loss = loss + timescale_lambda * (model.A[-model.P:] - pwl_timescale).pow(2).mean()
-            if incoming_lambda > 0.0 and model.P > 0:
-                loss = loss + incoming_lambda * model.W[-model.P:, :].pow(2).mean()
+            ps = model.P_switch
+            if timescale_lambda > 0.0 and pwl_timescale is not None and ps > 0:
+                loss = loss + timescale_lambda * (model.A[-ps:] - pwl_timescale).pow(2).mean()
+            if incoming_lambda > 0.0 and ps > 0:
+                loss = loss + incoming_lambda * model.W[-ps:, :].pow(2).mean()
             loss.backward()
             optimizer.step()
             epoch_losses.append(loss.item())
@@ -420,6 +459,10 @@ def train_alrnn(train_data, M, P, num_epochs=500, batch_size=8,
             msg = f"    Epoch {epoch}/{num_epochs}: loss={avg_loss:.6f}  alpha={alpha_t:.3f}"
             if epoch_switch_counts:
                 msg += f"  switch_count={np.mean(epoch_switch_counts):.2f}"
+            if temporal_input_target == 'monotone_gate' and hasattr(model, 'alpha_gate'):
+                αs = [f"{v:.2f}" for v in model.alpha_gate.detach().tolist()]
+                τs = [f"{v:.2f}" for v in model.tau_gate.detach().tolist()]
+                msg += f"  gate_α={αs}  gate_τ={τs}"
             print(msg)
 
         if epoch_callback is not None and (

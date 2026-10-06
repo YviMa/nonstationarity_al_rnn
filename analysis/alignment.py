@@ -166,14 +166,8 @@ def plot_alignment(
     axes[-1].set_xlabel("Time step", fontsize=9)
 
     # -- legend (first panel only) -----------------------------------------
-    bit_width = max(n_pwl_units, 1)
-    legend_handles = [
-        mpatches.Patch(facecolor=code_to_color[int(c)], alpha=0.6,
-                       label=f"bitcode {int(c):0{bit_width}b}")
-        for c in unique_codes
-    ]
     from matplotlib.lines import Line2D
-    legend_handles += [
+    legend_handles = [
         Line2D([0], [0], color="steelblue",    lw=1.5, label="observed"),
         Line2D([0], [0], color="coral",        lw=1.5, label="AL-RNN"),
         Line2D([0], [0], color="mediumpurple", lw=1.5, label="PWL (pre-ReLU)"),

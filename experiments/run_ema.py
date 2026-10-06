@@ -32,6 +32,7 @@ from analysis.regime_logger import (
 )
 from analysis.alignment import plot_alignment
 from analysis.consistency import bitcode_consistency
+from experiments.runner import _print_temporal_input_norms
 
 
 # ---------------------------------------------------------------------------
@@ -53,23 +54,28 @@ STUDIES = {
 CONFIG = {
     # --- data -----------------------------------------------------------------
     # Which study to use.  Keys: "fisher" | "gschwind" | "reeves" | "rowland"
-    "study": "rowland",
+    "study": "fisher",
     # Subject index (0 … n_subjects - 1).  Set to None to print subject count
     # and exit without training.
     "subject_id": 3,
 
     # --- temporal external input ----------------------------------------------
     "use_temporal_input": True,
-    "temporal_input_mode": "linear",   # 'none' | 'linear' | 'fourier'
+    "temporal_input_mode": "linear",         # 'none' | 'linear' | 'fourier'
+    "temporal_input_target": "monotone_gate",          # 'all' | 'pwl_only' | 'monotone_gate'
 
     # --- model ----------------------------------------------------------------
-    "M": 20,
+    "M": 30,
     "P": 1,
+    "P_switch": None,   # slow-switching units; None = all P (backward-compatible)
 
     # --- training -------------------------------------------------------------
     "num_epochs": 300,
-    "batch_size": 16,
-    "sequence_length": 50,
+    # sequence_length=None uses the full trajectory each step.
+    # batch_size must stay 1 — any larger value would sample the same start
+    # index (0) repeatedly and compute identical gradients.
+    "batch_size": 1,
+    "sequence_length": None,
     "alpha": 1.0,
     "end_alpha": 1.0,
     "n_interleave": 1,
@@ -84,7 +90,8 @@ CONFIG = {
     "switch_lambda": 0.0,
     "pwl_timescale": 0.95,
     "timescale_lambda": 0.0,
-    "incoming_lambda": 0.0,
+    "incoming_lambda": 0.01,
+    "pwl_state_lambda": 0.1,   # L2 penalty on |h[-P:]|² — prevents post-switch divergence
 
     # --- output ---------------------------------------------------------------
     # {study} and {subject_id} are filled in automatically.
@@ -97,7 +104,7 @@ CONFIG = {
 
     # --- consistency ----------------------------------------------------------
     # Number of independent runs for ARI consistency scoring (1 = disabled).
-    "n_runs": 5,
+    "n_runs": 1,
 }
 
 
@@ -291,6 +298,9 @@ def main(cfg: dict = CONFIG):
             pwl_timescale=cfg.get("pwl_timescale"),
             timescale_lambda=cfg.get("timescale_lambda", 0.0),
             incoming_lambda=cfg.get("incoming_lambda", 0.0),
+            temporal_input_target=cfg.get("temporal_input_target", "all"),
+            pwl_state_lambda=cfg.get("pwl_state_lambda", 0.0),
+            P_switch=cfg.get("P_switch"),
             epoch_callback=cb,
             callback_every=plot_every if plot_every is not None else 100,
         )
@@ -308,18 +318,27 @@ def main(cfg: dict = CONFIG):
     # ------------------------------------------------------------------
     # 5. Summary
     # ------------------------------------------------------------------
+    ti_target = cfg.get("temporal_input_target", "all")
     print("\n" + "=" * 50)
     print("SUMMARY")
     print("=" * 50)
     print(f"  Study / subject          : {study} / {subject_id}")
     print(f"  T={T}, N={N}")
+    print(f"  P / P_switch             : {cfg['P']} / {model.P_switch}")
+    print(f"  temporal_input_target    : {ti_target}")
     print(f"  Inferred transitions     : {n_transitions}")
     print(f"  Unique regimes           : {n_unique}")
+    if ti_target == "monotone_gate" and hasattr(model, "alpha_gate"):
+        αs = [f"{v:.3f}" for v in model.alpha_gate.detach().tolist()]
+        τs = [f"{v:.3f}" for v in model.tau_gate.detach().tolist()]
+        print(f"  Gate α / τ (final)       : α={αs}  τ={τs}")
     if n_runs > 1:
         consistency = bitcode_consistency(all_bitcodes)
         print(f"  Consistency (ARI)        : {consistency['mean_ari']:.3f} ± {consistency['std_ari']:.3f}"
               f"  (n_runs={n_runs})")
     print("=" * 50)
+
+    _print_temporal_input_norms(model)
 
     # ------------------------------------------------------------------
     # 6. Plots
@@ -337,6 +356,23 @@ def main(cfg: dict = CONFIG):
             show=True,
         )
 
+    # ------------------------------------------------------------------
+    # 7. Save checkpoint
+    # ------------------------------------------------------------------
+    model_path = fig_path.replace("_alignment.png", "_model.pt").replace(".png", "_model.pt")
+    torch.save({
+        "model_state_dict": model.state_dict(),
+        "M": model.M, "P": model.P, "N": model.N, "d_input": model.d_input,
+        "config":          cfg,
+        "mean":            mean.tolist(),
+        "std":             std.tolist(),
+        "train_series":    train_series,
+        "time_series":     raw,
+        "external_inputs": external_inputs,
+        "study":           study,
+        "subject_id":      subject_id,
+    }, model_path)
+    print(f"\n  Model saved → {model_path}")
 
 
 if __name__ == "__main__":

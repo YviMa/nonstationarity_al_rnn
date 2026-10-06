@@ -1,6 +1,6 @@
 """Switching bifurcation ODE data generator.
 
-Three low-dimensional systems are provided, each with a single bifurcation
+Four low-dimensional systems are provided, each with a single bifurcation
 parameter that can be switched between segments:
 
     hopf            — Stuart-Landau normal form.
@@ -17,6 +17,15 @@ parameter that can be switched between segments:
                       I_ext below ~0.34 : quiescent fixed point
                       I_ext above ~0.34 : spiking limit cycle (Hopf)
                       Biologically interpretable, 2-D.
+
+    lorenz63        — Lorenz (1963) system.
+                      ρ controls the qualitative regime:
+                        ρ < 1    : stable fixed point at origin
+                        1 < ρ < ~24.74 : two stable fixed points (C±)
+                        ρ > ~24.74 : chaotic strange attractor
+                      σ (default 10) and β (default 8/3) fixed via kwargs.
+                      Recommended pairs: [28, 35] (both chaotic, different
+                      geometry) or [14, 28] (fixed-point → chaos).  3-D.
 
 Usage::
 
@@ -96,10 +105,31 @@ def _fitzhugh_nagumo(I_ext: float, a: float = 0.7, b: float = 0.8,
     return f
 
 
+def _lorenz63(rho: float, sigma: float = 10.0, beta: float = 8.0 / 3.0):
+    """Lorenz (1963) system.
+
+    dx/dt = σ(y − x)
+    dy/dt = x(ρ − z) − y
+    dz/dt = xy − βz
+
+    ρ is the primary bifurcation parameter (switching param).
+    σ and β are fixed via system_kwargs.
+    """
+    def f(y: np.ndarray) -> np.ndarray:
+        x, v, z = y
+        return np.array([
+            sigma * (v - x),
+            x * (rho - z) - v,
+            x * v - beta * z,
+        ])
+    return f
+
+
 _SYSTEMS = {
     "hopf":            _hopf,
     "van_der_pol":     _van_der_pol,
     "fitzhugh_nagumo": _fitzhugh_nagumo,
+    "lorenz63":        _lorenz63,
 }
 
 # Default initial conditions (before warmup) per system.
@@ -108,10 +138,12 @@ _SYSTEMS = {
 #   hopf:        limit-cycle radius = sqrt(mu); for mu=0.5 that is ~0.707
 #   van_der_pol: limit-cycle amplitude ≈ 2 for all mu > 0
 #   fitzhugh_nagumo: near the resting fixed-point
+#   lorenz63:    near the classic attractor; warmup will drive it onto it
 _DEFAULT_Y0 = {
     "hopf":            np.array([0.707, 0.0]),
     "van_der_pol":     np.array([2.0,   0.0]),
     "fitzhugh_nagumo": np.array([-1.2, -0.6]),
+    "lorenz63":        np.array([1.0,   1.0,  1.0]),
 }
 
 
@@ -140,11 +172,12 @@ def generate_switching_ode(
 
     Parameters
     ----------
-    system : {'hopf', 'van_der_pol', 'fitzhugh_nagumo'}
+    system : {'hopf', 'van_der_pol', 'fitzhugh_nagumo', 'lorenz63'}
     param_values : list of float, length n_segments
         Bifurcation parameter per segment.
         - hopf / van_der_pol : μ
         - fitzhugh_nagumo    : I_ext
+        - lorenz63           : ρ (rho); σ and β fixed via system_kwargs
     segment_lengths : list of int, length n_segments
     dt : float
         RK4 integration step size.
