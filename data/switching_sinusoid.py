@@ -73,10 +73,8 @@ def generate_switching_sinusoid(
     # ------------------------------------------------------------------
     amplitudes = rng.uniform(0.5, 1.0, size=(n_nodes, n_components))
     # scale so each node has approximately unit variance:
-    # Var[node] ≈ sum_k A_k^2 / 2  →  want = 1  →  divide by sqrt(sum A_k^2 / 2)
     for i in range(n_nodes):
-        amplitudes[i] /= np.sqrt(np.sum(amplitudes[i] ** 2) / 2)
-
+        amplitudes[i] /= np.sqrt(np.var(amplitudes[i]))
     # ------------------------------------------------------------------
     # Segment metadata
     # ------------------------------------------------------------------
@@ -115,3 +113,15 @@ def generate_switching_sinusoid(
 
     X += rng.standard_normal(X.shape) * noise_std
     return X, switch_times, freq_params, segment_ids
+
+if __name__ == "__main__":
+    X, switch_times, freq_params, segment_ids = generate_switching_sinusoid(
+    n_nodes=2,
+    n_switches=2,
+    switch_strength=0.5,
+    segment_lengths=[100, 100, 100],
+    n_components=3,
+    freq_range=(0.02, 0.15),
+    noise_std=0.01,
+    random_seed=42
+)
