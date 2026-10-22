@@ -314,3 +314,26 @@ def generate_switching_var(
                 + rng.standard_normal(n_nodes) * noise_stds[seg])
 
     return X, switch_times, matrices, segment_ids
+
+if __name__ == "__main__":
+
+    for nstd in [0.005, 0.01, 0.05, 0.1, 0.3]:
+        X, switch_times, matrices, segment_ids=generate_switching_var(
+        scenario="critical_slowing",
+        n_nodes = 6,
+        segment_lengths = (50000, 50000),
+        noise_std = nstd,
+        # shared / generic params
+        spectral_radius = 0.9,
+        n_oscillation_modes= None,
+        random_seed= 42,
+        # modular_to_hub params
+        hub_strength= 0.4,
+        cross_coupling= 0.05,
+        # critical_slowing params
+        sr_low= 0.70,
+        sr_high= 0.97,
+        # random scenario params (backward-compat)
+        n_switches= 1,
+        switch_strength= 0.5
+        )
