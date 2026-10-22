@@ -124,7 +124,7 @@ def plot_alignment(
 
     unique_codes = np.unique(bitcodes)
     n_codes = len(unique_codes)
-    cmap = cm.get_cmap("tab10", max(n_codes, 2))
+    cmap = plt.get_cmap("tab10", max(n_codes, 2))
     code_to_color = {int(c): cmap(i) for i, c in enumerate(unique_codes)}
 
     fig, axes = plt.subplots(
@@ -210,7 +210,7 @@ def plot_bitcode_distributions(
     """
     unique_codes = np.unique(bitcodes)
     n_codes = len(unique_codes)
-    cmap = cm.get_cmap("tab10", max(n_codes, 2))
+    cmap = plt.get_cmap("tab10", max(n_codes, 2))
     code_to_color = {int(c): cmap(i) for i, c in enumerate(unique_codes)}
 
     segments = np.unique(segment_ids)
