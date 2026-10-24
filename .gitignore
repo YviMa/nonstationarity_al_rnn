@@ -10,3 +10,6 @@ results/
 # Python
 __pycache__/
 *.pyc
+
+# VSCode 
+.vscode/
