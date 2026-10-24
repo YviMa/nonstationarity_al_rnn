@@ -9,6 +9,9 @@ import os
 
 import numpy as np
 import torch
+import mlflow
+import tempfile
+from pathlib import Path
 
 from models.temporal_input import TemporalInput
 from alrnn import train_alrnn
@@ -51,7 +54,7 @@ def run_experiment(
     model, losses, bitcodes
     """
     T, _         = time_series.shape
-    n_segments   = len(np.unique(segment_ids))
+    n_segments   = len(np.unique(segment_ids)) # no need to log because segment_ids is in checkpoint
     fig_path     = cfg["figure_path"]
 
     # ------------------------------------------------------------------
@@ -67,7 +70,7 @@ def run_experiment(
     temporal_module = TemporalInput(
         mode=cfg["temporal_input_mode"] if cfg.get("use_temporal_input") else "none",
     )
-    external_inputs = temporal_module.compute_features(T)
+    external_inputs = temporal_module.compute_features(T) # in checkpoint -> no need to log
     d_input         = temporal_module.output_dim
     print(f"  temporal_input_mode={temporal_module.mode!r}, d_input={d_input}")
 
@@ -168,20 +171,42 @@ def run_experiment(
             callback_every=plot_every if plot_every is not None else 100,
         )
         print(f"  Final training loss: {losses[-1]:.6f}")
+        mlflow.log_metric("final_training_loss", losses[-1])
 
-        _, _, bitcodes = _run_trajectory(model)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_losses = Path(tmp_dir) / "losses.npy"
+            np.save(output_losses, losses)
+            mlflow.log_artifact(output_losses)
+
+        _, _, bitcodes = _run_trajectory(model) # we are letting the trained model run through the training trajectory again with teacher forcing for analysis
         all_bitcodes.append(bitcodes)
 
-    bitcodes     = all_bitcodes[-1]
+    bitcodes     = all_bitcodes[-1] # why are we doing this? why not save it for all models?
     n_unique     = count_unique_regimes(bitcodes)
     change_times = regime_change_times(bitcodes)
     n_transitions = len(change_times)
     generated_trajectory, pwl_trajectory, _ = _run_trajectory(model)
 
+    mlflow.log_metric("n_unique", n_unique)
+    mlflow.log_metric("n_transitions", n_transitions)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        output_bitcodes = Path(tmp_dir) / "bitcodes.npy"
+        np.save(output_bitcodes, bitcodes)
+        output_changetimes = Path(tmp_dir) / "changetimes.npy"
+        np.save(output_changetimes, bitcodes)
+        output_gen_traj = Path(tmp_dir) / "generated_trajectory.npy"
+        np.save(output_gen_traj, generated_trajectory)
+        output_pwl_traj = Path(tmp_dir) / "pwl_trajectory.npy"
+        np.save(output_pwl_traj, pwl_trajectory)
+        mlflow.log_artifacts(str(Path(tmp_dir)))
+
+    
     # ------------------------------------------------------------------
     # 5. Summary
     # ------------------------------------------------------------------
     alignment = temporal_alignment_score(switch_times, change_times)
+    mlflow.log_metric("temporal_alignment_score/mean_distance", alignment.get("mean_distance"))
+    mlflow.log_metric("temporal_alignment_score/mean_distance", alignment.get("max_distance"))
     ti_target = cfg.get("temporal_input_target", "all")
     print("\n" + "=" * 50)
     print("SUMMARY")
@@ -203,9 +228,10 @@ def run_experiment(
         consistency = bitcode_consistency(all_bitcodes)
         print(f"  Consistency (ARI)        : {consistency['mean_ari']:.3f} ± "
               f"{consistency['std_ari']:.3f}  (n_runs={n_runs})")
+        mlflow.log_metric("consistency", consistency)
     print("=" * 50)
 
-    _print_temporal_input_norms(model)
+    _print_temporal_input_norms(model) # can be easily recreated from checkpoint -> no log
 
     # ------------------------------------------------------------------
     # 6. Final plots
@@ -250,8 +276,11 @@ def run_experiment(
     if extra_checkpoint:
         checkpoint.update(extra_checkpoint)
     torch.save(checkpoint, model_path)
+    mlflow.log_artifact(model_path)
     print(f"\n  Model saved → {model_path}")
 
+    results_path = Path(fig_path).parent
+    mlflow.log_artifacts(results_path)
     return model, losses, bitcodes
 
 

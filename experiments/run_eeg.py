@@ -25,6 +25,7 @@ from the repository root.
 
 import os
 import sys
+import mlflow
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -109,89 +110,100 @@ CONFIG = {
 # ---------------------------------------------------------------------------
 
 def main(cfg: dict = CONFIG):
-    patient = cfg.get("patient", "chb03")
-    if patient not in _PATIENT_SESSIONS:
-        raise ValueError(f"patient must be one of {list(_PATIENT_SESSIONS)}, got {patient!r}")
-    session = cfg["session"]
-    if session not in _PATIENT_SESSIONS[patient]:
-        raise ValueError(f"session must be one of {_PATIENT_SESSIONS[patient]} for {patient}, got {session}")
 
-    fname = os.path.join(_EEG_DIR, f"{patient}_{session:02d}_processed.npz")
-    d     = np.load(fname, allow_pickle=True)
+    mlflow.set_tracking_uri("sqlite:////gs/home/wernery/nonstationarity_al_rnn/mlflow_test.db")
+    mlflow.set_experiment("EEG")
+    
+    with mlflow.start_run() as run:
+    
+        mlflow.log_params(cfg)
+        
+        patient = cfg.get("patient", "chb03")
+        if patient not in _PATIENT_SESSIONS:
+            raise ValueError(f"patient must be one of {list(_PATIENT_SESSIONS)}, got {patient!r}")
+        session = cfg["session"]
+        if session not in _PATIENT_SESSIONS[patient]:
+            raise ValueError(f"session must be one of {_PATIENT_SESSIONS[patient]} for {patient}, got {session}")
 
-    # (23, n_samples) → (n_samples, 23); already z-scored per channel
-    x_raw         = d["x_window"].T.astype(np.float32)
-    onset_sample  = int(d["onset_sample"])
-    offset_sample = int(d["offset_sample"])
-    sfreq         = float(d["sfreq"])
-    ch_names      = d["ch_names"].tolist()
+        fname = os.path.join(_EEG_DIR, f"{patient}_{session:02d}_processed.npz")
+        d     = np.load(fname, allow_pickle=True)
 
-    T_raw, N = x_raw.shape
-    print(f"Loaded: {patient} session {session}  |  T={T_raw}, N={N} channels, "
-          f"sfreq={sfreq:.0f} Hz")
-    print(f"  onset_sample={onset_sample}  offset_sample={offset_sample}  "
-          f"seizure duration: {(offset_sample - onset_sample) / sfreq:.1f} s")
-    print(f"  total window: {T_raw / sfreq:.1f} s")
+        # (23, n_samples) → (n_samples, 23); already z-scored per channel
+        x_raw         = d["x_window"].T.astype(np.float32)
+        onset_sample  = int(d["onset_sample"])
+        offset_sample = int(d["offset_sample"])
+        sfreq         = float(d["sfreq"])
+        ch_names      = d["ch_names"].tolist()
 
-    # ------------------------------------------------------------------
-    # Subsampling
-    # ------------------------------------------------------------------
-    sf = max(1, int(cfg.get("subsample_factor", 1)))
-    if sf > 1:
-        x_ds          = x_raw[::sf]
-        onset_ds      = onset_sample  // sf
-        offset_ds     = offset_sample // sf
-        T             = len(x_ds)
-        eff_sfreq     = sfreq / sf
-        print(f"  Subsampled ×{sf}: T={T}, effective sfreq={eff_sfreq:.1f} Hz")
-    else:
-        x_ds      = x_raw
-        onset_ds  = onset_sample
-        offset_ds = offset_sample
-        T         = T_raw
-        eff_sfreq = sfreq
+        T_raw, N = x_raw.shape
+        print(f"Loaded: {patient} session {session}  |  T={T_raw}, N={N} channels, "
+            f"sfreq={sfreq:.0f} Hz")
+        print(f"  onset_sample={onset_sample}  offset_sample={offset_sample}  "
+            f"seizure duration: {(offset_sample - onset_sample) / sfreq:.1f} s")
+        print(f"  total window: {T_raw / sfreq:.1f} s")
 
-    # ------------------------------------------------------------------
-    # Ground-truth segmentation
-    # 3 regimes: interictal (0) → ictal (1) → postictal (2)
-    # ------------------------------------------------------------------
-    switch_times = np.array([onset_ds, offset_ds], dtype=int)
-    segment_ids  = np.zeros(T, dtype=int)
-    segment_ids[onset_ds:offset_ds] = 1
-    segment_ids[offset_ds:]         = 2
+        # ------------------------------------------------------------------
+        # Subsampling
+        # ------------------------------------------------------------------
+        sf = max(1, int(cfg.get("subsample_factor", 1)))
+        if sf > 1:
+            x_ds          = x_raw[::sf]
+            onset_ds      = onset_sample  // sf
+            offset_ds     = offset_sample // sf
+            T             = len(x_ds)
+            eff_sfreq     = sfreq / sf
+            print(f"  Subsampled ×{sf}: T={T}, effective sfreq={eff_sfreq:.1f} Hz")
+        else:
+            x_ds      = x_raw
+            onset_ds  = onset_sample
+            offset_ds = offset_sample
+            T         = T_raw
+            eff_sfreq = sfreq
+        mlflow.log_metric("sf", sf)
+        mlflow.log_metric("T", T)
+        mlflow.log_metric("sfreq", sfreq)
+        mlflow.log_metric("eff_sfreq", eff_sfreq)
+        # ------------------------------------------------------------------
+        # Ground-truth segmentation
+        # 3 regimes: interictal (0) → ictal (1) → postictal (2)
+        # ------------------------------------------------------------------
+        switch_times = np.array([onset_ds, offset_ds], dtype=int)
+        segment_ids  = np.zeros(T, dtype=int)
+        segment_ids[onset_ds:offset_ds] = 1
+        segment_ids[offset_ds:]         = 2
 
-    # ------------------------------------------------------------------
-    # Resolve paths (fill in {patient} and {session} placeholders)
-    # ------------------------------------------------------------------
-    fig_path   = cfg["figure_path"].format(patient=patient, session=session)
-    model_path = fig_path.replace(".png", "_model.pt")
-    cfg        = dict(cfg)
-    cfg["figure_path"] = fig_path
+        # ------------------------------------------------------------------
+        # Resolve paths (fill in {patient} and {session} placeholders)
+        # ------------------------------------------------------------------
+        fig_path   = cfg["figure_path"].format(patient=patient, session=session)
+        model_path = fig_path.replace(".png", "_model.pt")
+        cfg        = dict(cfg)
+        cfg["figure_path"] = fig_path
 
-    # ------------------------------------------------------------------
-    # Hand off to shared runner
-    # ------------------------------------------------------------------
-    run_experiment(
-        cfg, x_ds, switch_times, segment_ids,
-        model_path=model_path,
-        extra_checkpoint={
-            "session":          session,
-            "onset_sample":     onset_ds,
-            "offset_sample":    offset_ds,
-            "subsample_factor": sf,
-            "sfreq_original":   sfreq,
-            "sfreq_effective":  eff_sfreq,
-            "ch_names":         ch_names,
-        },
-        summary_lines=[
-            f"  System                   : CHB-MIT EEG  patient {patient}",
-            f"  Session                  : {session}",
-            f"  Channels (N)             : {N}",
-            f"  Subsample factor         : {sf}  (effective {eff_sfreq:.1f} Hz)",
-            f"  Seizure onset / offset   : t={onset_ds} / {offset_ds}  "
-            f"({onset_ds / eff_sfreq:.1f} s / {offset_ds / eff_sfreq:.1f} s)",
-        ],
-    )
+        # ------------------------------------------------------------------
+        # Hand off to shared runner
+        # ------------------------------------------------------------------
+        run_experiment(
+            cfg, x_ds, switch_times, segment_ids,
+            model_path=model_path,
+            extra_checkpoint={
+                "session":          session,
+                "onset_sample":     onset_ds,
+                "offset_sample":    offset_ds,
+                "subsample_factor": sf,
+                "sfreq_original":   sfreq,
+                "sfreq_effective":  eff_sfreq,
+                "ch_names":         ch_names,
+            },
+            summary_lines=[
+                f"  System                   : CHB-MIT EEG  patient {patient}",
+                f"  Session                  : {session}",
+                f"  Channels (N)             : {N}",
+                f"  Subsample factor         : {sf}  (effective {eff_sfreq:.1f} Hz)",
+                f"  Seizure onset / offset   : t={onset_ds} / {offset_ds}  "
+                f"({onset_ds / eff_sfreq:.1f} s / {offset_ds / eff_sfreq:.1f} s)",
+            ],
+        )
 
 
 if __name__ == "__main__":

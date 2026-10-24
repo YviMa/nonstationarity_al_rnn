@@ -30,6 +30,7 @@ from the repository root.
 
 import os
 import sys
+import mlflow
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -121,43 +122,51 @@ CONFIG = {
 # ---------------------------------------------------------------------------
 
 def main(cfg: dict = CONFIG) -> None:
-    scenario = cfg["scenario"]
 
-    # ------------------------------------------------------------------
-    # 1. Generate dataset
-    # ------------------------------------------------------------------
-    print(f"Generating switching VAR(1) data  scenario={scenario!r} …")
-    time_series, switch_times, matrices, segment_ids = generate_switching_var(
-        scenario=scenario,
-        n_nodes=cfg["n_nodes"],
-        segment_lengths=cfg["segment_lengths"],
-        noise_std=cfg["noise_std"],
-        spectral_radius=cfg.get("spectral_radius", 0.9),
-        sr_low=cfg.get("sr_low", 0.70),
-        sr_high=cfg.get("sr_high", 0.97),
-        hub_strength=cfg.get("hub_strength", 0.4),
-        cross_coupling=cfg.get("cross_coupling", 0.05),
-        n_oscillation_modes=cfg.get("n_oscillation_modes"),
-        random_seed=cfg["random_seed"],
-        switch_strength=cfg.get("switch_strength", 0.5),
-    )
-    T, N = time_series.shape
-    print(f"  T={T}, N={N}, switch_times={switch_times.tolist()}")
-    _describe_scenario(scenario, matrices, cfg)
+    mlflow.set_tracking_uri("sqlite:////gs/home/wernery/nonstationarity_al_rnn/mlflow_test.db")
+    mlflow.set_experiment("VAR")
 
-    # ------------------------------------------------------------------
-    # 2. Resolve paths and hand off to shared runner
-    # ------------------------------------------------------------------
-    fig_path   = cfg["figure_path"].format(scenario=scenario)
-    cfg        = {**cfg, "figure_path": fig_path}
-    model_path = fig_path.replace("_alignment.png", "_model.pt").replace(".png", "_model.pt")
+    with mlflow.start_run() as run:
 
-    run_experiment(
-        cfg, time_series, switch_times, segment_ids,
-        model_path=model_path,
-        extra_checkpoint={"scenario": scenario},
-        summary_lines=[f"  Scenario                 : {scenario}"],
-    )
+        mlflow.log_params(cfg)
+
+        scenario = cfg["scenario"]
+
+        # ------------------------------------------------------------------
+        # 1. Generate dataset
+        # ------------------------------------------------------------------
+        print(f"Generating switching VAR(1) data  scenario={scenario!r} …")
+        time_series, switch_times, matrices, segment_ids = generate_switching_var(
+            scenario=scenario,
+            n_nodes=cfg["n_nodes"],
+            segment_lengths=cfg["segment_lengths"],
+            noise_std=cfg["noise_std"],
+            spectral_radius=cfg.get("spectral_radius", 0.9),
+            sr_low=cfg.get("sr_low", 0.70),
+            sr_high=cfg.get("sr_high", 0.97),
+            hub_strength=cfg.get("hub_strength", 0.4),
+            cross_coupling=cfg.get("cross_coupling", 0.05),
+            n_oscillation_modes=cfg.get("n_oscillation_modes"),
+            random_seed=cfg["random_seed"],
+            switch_strength=cfg.get("switch_strength", 0.5),
+        )
+        T, N = time_series.shape
+        print(f"  T={T}, N={N}, switch_times={switch_times.tolist()}")
+        _describe_scenario(scenario, matrices, cfg)
+
+        # ------------------------------------------------------------------
+        # 2. Resolve paths and hand off to shared runner
+        # ------------------------------------------------------------------
+        fig_path   = cfg["figure_path"].format(scenario=scenario)
+        cfg        = {**cfg, "figure_path": fig_path}
+        model_path = fig_path.replace("_alignment.png", "_model.pt").replace(".png", "_model.pt")
+
+        run_experiment(
+            cfg, time_series, switch_times, segment_ids,
+            model_path=model_path,
+            extra_checkpoint={"scenario": scenario},
+            summary_lines=[f"  Scenario                 : {scenario}"],
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ from the repository root.
 
 import os
 import sys
+import mlflow
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -79,37 +80,45 @@ CONFIG = {
 # ---------------------------------------------------------------------------
 
 def main(cfg: dict = CONFIG) -> None:
-    # ------------------------------------------------------------------
-    # 1. Generate dataset
-    # ------------------------------------------------------------------
-    print("Generating switching sinusoid data …")
-    time_series, switch_times, _, segment_ids = generate_switching_sinusoid(
-        n_nodes=cfg["n_nodes"],
-        n_switches=cfg["n_switches"],
-        switch_strength=cfg["switch_strength"],
-        segment_lengths=cfg["segment_lengths"],
-        n_components=cfg["n_components"],
-        freq_range=tuple(cfg["freq_range"]),
-        noise_std=cfg["noise_std"],
-        random_seed=cfg["random_seed"],
-    )
-    T, N = time_series.shape
-    n_segments = cfg["n_switches"] + 1
-    print(f"  T={T}, N={N}, segments={n_segments}, switch_times={switch_times.tolist()}")
 
-    # ------------------------------------------------------------------
-    # 2. Build model path (encodes key hypers to avoid overwriting)
-    # ------------------------------------------------------------------
-    fr = cfg["freq_range"]
-    ss = cfg["switch_strength"]
-    model_path = cfg["figure_path"].replace(".png", f"_ss{ss}_fr{fr[0]}-{fr[1]}_model.pt")
+    mlflow.set_tracking_uri("sqlite:////gs/home/wernery/nonstationarity_al_rnn/mlflow_test.db")
+    mlflow.set_experiment("Sinusoid")
+    
+    with mlflow.start_run() as run:
+    
+        mlflow.log_params(cfg)
 
-    run_experiment(
-        cfg, time_series, switch_times, segment_ids,
-        model_path=model_path,
-        extra_checkpoint={"switch_strength": ss, "freq_range": fr},
-        summary_lines=[f"  Segments                 : {n_segments}"],
-    )
+        # ------------------------------------------------------------------
+        # 1. Generate dataset
+        # ------------------------------------------------------------------
+        print("Generating switching sinusoid data …")
+        time_series, switch_times, _, segment_ids = generate_switching_sinusoid(
+            n_nodes=cfg["n_nodes"],
+            n_switches=cfg["n_switches"],
+            switch_strength=cfg["switch_strength"],
+            segment_lengths=cfg["segment_lengths"],
+            n_components=cfg["n_components"],
+            freq_range=tuple(cfg["freq_range"]),
+            noise_std=cfg["noise_std"],
+            random_seed=cfg["random_seed"],
+        )
+        T, N = time_series.shape
+        n_segments = cfg["n_switches"] + 1
+        print(f"  T={T}, N={N}, segments={n_segments}, switch_times={switch_times.tolist()}")
+
+        # ------------------------------------------------------------------
+        # 2. Build model path (encodes key hypers to avoid overwriting)
+        # ------------------------------------------------------------------
+        fr = cfg["freq_range"]
+        ss = cfg["switch_strength"]
+        model_path = cfg["figure_path"].replace(".png", f"_ss{ss}_fr{fr[0]}-{fr[1]}_model.pt")
+
+        run_experiment(
+            cfg, time_series, switch_times, segment_ids,
+            model_path=model_path,
+            extra_checkpoint={"switch_strength": ss, "freq_range": fr},
+            summary_lines=[f"  Segments                 : {n_segments}"],
+        )
 
 
 if __name__ == "__main__":

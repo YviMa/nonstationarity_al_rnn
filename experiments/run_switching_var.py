@@ -15,6 +15,7 @@ from the repository root.
 
 import os
 import sys
+import mlflow
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -127,167 +128,174 @@ def _generate_data(cfg: dict):
 
 
 def main(cfg: dict = CONFIG) -> None:
-    # ------------------------------------------------------------------
-    # 1. Generate dataset
-    # ------------------------------------------------------------------
-    print(f"Generating switching {cfg['data_type']} data …")
-    time_series, switch_times, _, segment_ids = _generate_data(cfg)
-    T, N = time_series.shape
-    n_segments = cfg["n_switches"] + 1
-    print(f"  T={T}, N={N}, segments={n_segments}, switch_times={switch_times.tolist()}")
 
-    # ------------------------------------------------------------------
-    # 2. Dimension-wise standardisation (zero mean, unit variance per node)
-    # ------------------------------------------------------------------
-    mean = time_series.mean(axis=0)
-    std  = time_series.std(axis=0)
-    std[std == 0] = 1.0
-    train_series = (time_series - mean) / std
+    mlflow.set_tracking_uri("sqlite:////gs/home/wernery/nonstationarity_al_rnn/mlflow_test.db")
+    mlflow.set_experiment("SwitchingVAR")
 
-    # ------------------------------------------------------------------
-    # 3. Compute temporal external inputs (not part of observations)
-    # ------------------------------------------------------------------
-    temporal_module = TemporalInput(
-        mode=cfg["temporal_input_mode"] if cfg["use_temporal_input"] else "none"
-    )
-    external_inputs = temporal_module.compute_features(T)  # (T, d_input) or None
-    d_input = temporal_module.output_dim
-    print(f"  temporal_input_mode={temporal_module.mode!r}, d_input={d_input}")
+    with mlflow.start_run() as run:
 
-    # ------------------------------------------------------------------
-    # 4b. Helper: run one forward pass and return trajectory + bitcodes
-    # ------------------------------------------------------------------
-    from alrnn.training import predict_sequence_using_itf
+        mlflow.log_params(cfg)
+        # ------------------------------------------------------------------
+        # 1. Generate dataset
+        # ------------------------------------------------------------------
+        print(f"Generating switching {cfg['data_type']} data …")
+        time_series, switch_times, _, segment_ids = _generate_data(cfg)
+        T, N = time_series.shape
+        n_segments = cfg["n_switches"] + 1
+        print(f"  T={T}, N={N}, segments={n_segments}, switch_times={switch_times.tolist()}")
 
-    x_full           = torch.tensor(train_series, dtype=torch.float32).unsqueeze(0)
-    u_full           = (torch.tensor(external_inputs, dtype=torch.float32).unsqueeze(0)
-                        if external_inputs is not None else None)
-    vis_alpha        = cfg.get("end_alpha") if cfg.get("end_alpha") is not None else cfg["alpha"]
-    vis_n_interleave = cfg.get("n_interleave", 1)
-    collect_pwl      = cfg["P"] > 0
-    base_stem        = cfg["figure_path"].replace(".png", "")
+        # ------------------------------------------------------------------
+        # 2. Dimension-wise standardisation (zero mean, unit variance per node)
+        # ------------------------------------------------------------------
+        mean = time_series.mean(axis=0)
+        std  = time_series.std(axis=0)
+        std[std == 0] = 1.0
+        train_series = (time_series - mean) / std
 
-    def _run_trajectory(mdl):
-        with torch.no_grad():
-            if cfg["forcing_mode"] == "itf":
-                res = predict_sequence_using_itf(
-                    mdl, x_full, vis_alpha, u=u_full,
-                    n_interleave=vis_n_interleave, return_pwl_states=collect_pwl)
-            else:
-                res = predict_sequence_using_gtf(
-                    mdl, x_full, vis_alpha, u=u_full,
-                    n_interleave=vis_n_interleave, return_pwl_states=collect_pwl)
-        if collect_pwl:
-            gen_t, pwl_t = res
-            pwl_traj = pwl_t[0].cpu().numpy()
-        else:
-            gen_t, pwl_traj = res, None
-        gen_obs = gen_t[0].cpu().numpy() * std + mean
-        codes   = (bitcodes_from_pwl_states(pwl_traj) if pwl_traj is not None
-                   else log_bitcodes(mdl, train_series, forcing_mode=cfg["forcing_mode"]))
-        return gen_obs, pwl_traj, codes
-
-    # ------------------------------------------------------------------
-    # 4c. Build mid-training alignment-plot callback
-    # ------------------------------------------------------------------
-    def _alignment_callback(mdl, epoch):
-        is_final  = (epoch >= cfg["num_epochs"])
-        tag       = "_final" if is_final else f"_epoch{epoch:04d}"
-        save_path = f"{base_stem}{tag}.png"
-        gen_obs, pwl_traj, codes = _run_trajectory(mdl)
-        n_trans = len(regime_change_times(codes))
-        plot_alignment(
-            time_series=time_series,
-            generated_trajectory=gen_obs,
-            switch_times=switch_times,
-            bitcodes=codes,
-            n_pwl_units=cfg["P"],
-            pwl_states=pwl_traj,
-            save_path=save_path,
-            show=False,   # never block training
+        # ------------------------------------------------------------------
+        # 3. Compute temporal external inputs (not part of observations)
+        # ------------------------------------------------------------------
+        temporal_module = TemporalInput(
+            mode=cfg["temporal_input_mode"] if cfg["use_temporal_input"] else "none"
         )
-        print(f"    [epoch {epoch}] → {save_path}  (transitions: {n_trans})")
+        external_inputs = temporal_module.compute_features(T)  # (T, d_input) or None
+        d_input = temporal_module.output_dim
+        print(f"  temporal_input_mode={temporal_module.mode!r}, d_input={d_input}")
 
-    plot_every     = cfg.get("plot_every")
-    epoch_callback = _alignment_callback if plot_every is not None else None
+        # ------------------------------------------------------------------
+        # 4b. Helper: run one forward pass and return trajectory + bitcodes
+        # ------------------------------------------------------------------
+        from alrnn.training import predict_sequence_using_itf
 
-    # ------------------------------------------------------------------
-    # 4. Train AL-RNN with GTF / ITF
-    # ------------------------------------------------------------------
-    print(f"\nTraining AL-RNN  M={cfg['M']}, P={cfg['P']}, d_input={d_input}, "
-          f"epochs={cfg['num_epochs']} …")
-    model, losses = train_alrnn(
-        train_data=train_series,
-        M=cfg["M"],
-        P=cfg["P"],
-        num_epochs=cfg["num_epochs"],
-        batch_size=cfg["batch_size"],
-        sequence_length=cfg["sequence_length"],
-        alpha=cfg["alpha"],
-        end_alpha=cfg.get("end_alpha"),
-        n_interleave=cfg.get("n_interleave", 1),
-        start_lr=cfg["start_lr"],
-        end_lr=cfg["end_lr"],
-        batches_per_epoch=cfg["batches_per_epoch"],
-        forcing_mode=cfg["forcing_mode"],
-        device=cfg["device"],
-        verbose=cfg["verbose"],
-        external_inputs=external_inputs,
-        switch_lambda=cfg.get("switch_lambda", 0.0),
-        pwl_timescale=cfg.get("pwl_timescale"),
-        timescale_lambda=cfg.get("timescale_lambda", 0.0),
-        epoch_callback=epoch_callback,
-        callback_every=plot_every if plot_every is not None else 100,
-    )
-    print(f"  Final training loss: {losses[-1]:.6f}")
+        x_full           = torch.tensor(train_series, dtype=torch.float32).unsqueeze(0)
+        u_full           = (torch.tensor(external_inputs, dtype=torch.float32).unsqueeze(0)
+                            if external_inputs is not None else None)
+        vis_alpha        = cfg.get("end_alpha") if cfg.get("end_alpha") is not None else cfg["alpha"]
+        vis_n_interleave = cfg.get("n_interleave", 1)
+        collect_pwl      = cfg["P"] > 0
+        base_stem        = cfg["figure_path"].replace(".png", "")
 
-    # ------------------------------------------------------------------
-    # 5 + 6. Final trajectory, regime logging, summary
-    # ------------------------------------------------------------------
-    generated_trajectory, pwl_trajectory, bitcodes = _run_trajectory(model)
-    n_unique      = count_unique_regimes(bitcodes)
-    change_times  = regime_change_times(bitcodes)
-    n_transitions = len(change_times)
+        def _run_trajectory(mdl):
+            with torch.no_grad():
+                if cfg["forcing_mode"] == "itf":
+                    res = predict_sequence_using_itf(
+                        mdl, x_full, vis_alpha, u=u_full,
+                        n_interleave=vis_n_interleave, return_pwl_states=collect_pwl)
+                else:
+                    res = predict_sequence_using_gtf(
+                        mdl, x_full, vis_alpha, u=u_full,
+                        n_interleave=vis_n_interleave, return_pwl_states=collect_pwl)
+            if collect_pwl:
+                gen_t, pwl_t = res
+                pwl_traj = pwl_t[0].cpu().numpy()
+            else:
+                gen_t, pwl_traj = res, None
+            gen_obs = gen_t[0].cpu().numpy() * std + mean
+            codes   = (bitcodes_from_pwl_states(pwl_traj) if pwl_traj is not None
+                    else log_bitcodes(mdl, train_series, forcing_mode=cfg["forcing_mode"]))
+            return gen_obs, pwl_traj, codes
 
-    # ------------------------------------------------------------------
-    # 7. Alignment evaluation + summary
-    # ------------------------------------------------------------------
-    alignment = temporal_alignment_score(switch_times, change_times)
+        # ------------------------------------------------------------------
+        # 4c. Build mid-training alignment-plot callback
+        # ------------------------------------------------------------------
+        def _alignment_callback(mdl, epoch):
+            is_final  = (epoch >= cfg["num_epochs"])
+            tag       = "_final" if is_final else f"_epoch{epoch:04d}"
+            save_path = f"{base_stem}{tag}.png"
+            gen_obs, pwl_traj, codes = _run_trajectory(mdl)
+            n_trans = len(regime_change_times(codes))
+            plot_alignment(
+                time_series=time_series,
+                generated_trajectory=gen_obs,
+                switch_times=switch_times,
+                bitcodes=codes,
+                n_pwl_units=cfg["P"],
+                pwl_states=pwl_traj,
+                save_path=save_path,
+                show=False,   # never block training
+            )
+            print(f"    [epoch {epoch}] → {save_path}  (transitions: {n_trans})")
 
-    print("\n" + "=" * 50)
-    print("SUMMARY")
-    print("=" * 50)
-    print(f"  Ground-truth switches    : {n_segments - 1}")
-    print(f"  Inferred transitions     : {n_transitions}  (ideal = {n_segments - 1})")
-    print(f"  Unique regimes           : {n_unique}")
-    print(f"  Alignment mean / max     : {alignment['mean_distance']:.1f} / {alignment['max_distance']:.1f} steps")
-    print("=" * 50)
+        plot_every     = cfg.get("plot_every")
+        epoch_callback = _alignment_callback if plot_every is not None else None
 
-    # ------------------------------------------------------------------
-    # 8. Final alignment figure + bitcode-distribution plot
-    # ------------------------------------------------------------------
-    # If callbacks were used, the final alignment plot was already saved with
-    # tag "_final"; otherwise save now with the configured figure_path.
-    if epoch_callback is None:
-        plot_alignment(
-            time_series=time_series,
-            generated_trajectory=generated_trajectory,
-            switch_times=switch_times,
+        # ------------------------------------------------------------------
+        # 4. Train AL-RNN with GTF / ITF
+        # ------------------------------------------------------------------
+        print(f"\nTraining AL-RNN  M={cfg['M']}, P={cfg['P']}, d_input={d_input}, "
+            f"epochs={cfg['num_epochs']} …")
+        model, losses = train_alrnn(
+            train_data=train_series,
+            M=cfg["M"],
+            P=cfg["P"],
+            num_epochs=cfg["num_epochs"],
+            batch_size=cfg["batch_size"],
+            sequence_length=cfg["sequence_length"],
+            alpha=cfg["alpha"],
+            end_alpha=cfg.get("end_alpha"),
+            n_interleave=cfg.get("n_interleave", 1),
+            start_lr=cfg["start_lr"],
+            end_lr=cfg["end_lr"],
+            batches_per_epoch=cfg["batches_per_epoch"],
+            forcing_mode=cfg["forcing_mode"],
+            device=cfg["device"],
+            verbose=cfg["verbose"],
+            external_inputs=external_inputs,
+            switch_lambda=cfg.get("switch_lambda", 0.0),
+            pwl_timescale=cfg.get("pwl_timescale"),
+            timescale_lambda=cfg.get("timescale_lambda", 0.0),
+            epoch_callback=epoch_callback,
+            callback_every=plot_every if plot_every is not None else 100,
+        )
+        print(f"  Final training loss: {losses[-1]:.6f}")
+
+        # ------------------------------------------------------------------
+        # 5 + 6. Final trajectory, regime logging, summary
+        # ------------------------------------------------------------------
+        generated_trajectory, pwl_trajectory, bitcodes = _run_trajectory(model)
+        n_unique      = count_unique_regimes(bitcodes)
+        change_times  = regime_change_times(bitcodes)
+        n_transitions = len(change_times)
+
+        # ------------------------------------------------------------------
+        # 7. Alignment evaluation + summary
+        # ------------------------------------------------------------------
+        alignment = temporal_alignment_score(switch_times, change_times)
+
+        print("\n" + "=" * 50)
+        print("SUMMARY")
+        print("=" * 50)
+        print(f"  Ground-truth switches    : {n_segments - 1}")
+        print(f"  Inferred transitions     : {n_transitions}  (ideal = {n_segments - 1})")
+        print(f"  Unique regimes           : {n_unique}")
+        print(f"  Alignment mean / max     : {alignment['mean_distance']:.1f} / {alignment['max_distance']:.1f} steps")
+        print("=" * 50)
+
+        # ------------------------------------------------------------------
+        # 8. Final alignment figure + bitcode-distribution plot
+        # ------------------------------------------------------------------
+        # If callbacks were used, the final alignment plot was already saved with
+        # tag "_final"; otherwise save now with the configured figure_path.
+        if epoch_callback is None:
+            plot_alignment(
+                time_series=time_series,
+                generated_trajectory=generated_trajectory,
+                switch_times=switch_times,
+                bitcodes=bitcodes,
+                n_pwl_units=cfg["P"],
+                pwl_states=pwl_trajectory,
+                save_path=cfg["figure_path"],
+                show=True,
+            )
+
+        dist_path = cfg["figure_path"].replace(".png", "_bitcode_dist.png")
+        plot_bitcode_distributions(
             bitcodes=bitcodes,
+            segment_ids=segment_ids,
             n_pwl_units=cfg["P"],
-            pwl_states=pwl_trajectory,
-            save_path=cfg["figure_path"],
+            save_path=dist_path,
             show=True,
         )
-
-    dist_path = cfg["figure_path"].replace(".png", "_bitcode_dist.png")
-    plot_bitcode_distributions(
-        bitcodes=bitcodes,
-        segment_ids=segment_ids,
-        n_pwl_units=cfg["P"],
-        save_path=dist_path,
-        show=True,
-    )
 
 
 if __name__ == "__main__":

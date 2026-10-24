@@ -27,6 +27,7 @@ from the repository root.
 
 import os
 import sys
+import mlflow
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -72,7 +73,7 @@ CONFIG = {
     "P_switch": 1,
 
     # --- Training -------------------------------------------------------------
-    "num_epochs": 300,
+    "num_epochs": 1,
     "batch_size": 16,
     "sequence_length": 78,
     "alpha": 1.0,
@@ -109,43 +110,51 @@ CONFIG = {
 # ---------------------------------------------------------------------------
 
 def main(cfg: dict = CONFIG):
-    rho_vals = cfg["param_values"]
-    sigma    = cfg.get("sigma", 10.0)
-    beta     = cfg.get("beta",  8.0 / 3.0)
 
-    # ------------------------------------------------------------------
-    # 1. Generate data
-    # ------------------------------------------------------------------
-    print(f"Generating Lorenz-63  ρ={rho_vals}, σ={sigma}, β={beta:.4f}")
-    time_series, switch_times, segment_ids = generate_switching_ode(
-        system="lorenz63",
-        param_values=rho_vals,
-        segment_lengths=cfg["segment_lengths"],
-        dt=cfg["dt"],
-        warmup=cfg["warmup"],
-        noise_std=cfg["noise_std"],
-        random_seed=cfg["random_seed"],
-        sigma=sigma,
-        beta=beta,
-    )
-    T, N = time_series.shape
-    print(f"  T={T}, N={N}, switch_times={switch_times.tolist()}")
-    _describe_lorenz(rho_vals, time_series, segment_ids)
+    mlflow.set_tracking_uri("sqlite:////gs/home/wernery/nonstationarity_al_rnn/mlflow_test.db")
+    mlflow.set_experiment("Lorenz63")
 
-    # ------------------------------------------------------------------
-    # 2. Hand off to shared runner
-    # ------------------------------------------------------------------
-    model_path = cfg["figure_path"].replace("_alignment.png", "_model.pt").replace(".png", "_model.pt")
+    with mlflow.start_run() as run:
 
-    run_experiment(
-        cfg, time_series, switch_times, segment_ids,
-        model_path=model_path,
-        extra_checkpoint={"rho_vals": rho_vals},
-        summary_lines=[
-            f"  System                   : Lorenz-63",
-            f"  ρ per segment            : {rho_vals}",
-        ],
-    )
+        mlflow.log_params(cfg)
+        
+        rho_vals = cfg["param_values"]
+        sigma    = cfg.get("sigma", 10.0)
+        beta     = cfg.get("beta",  8.0 / 3.0)
+
+        # ------------------------------------------------------------------
+        # 1. Generate data
+        # ------------------------------------------------------------------
+        print(f"Generating Lorenz-63  ρ={rho_vals}, σ={sigma}, β={beta:.4f}")
+        time_series, switch_times, segment_ids = generate_switching_ode(
+            system="lorenz63",
+            param_values=rho_vals,
+            segment_lengths=cfg["segment_lengths"],
+            dt=cfg["dt"],
+            warmup=cfg["warmup"],
+            noise_std=cfg["noise_std"],
+            random_seed=cfg["random_seed"],
+            sigma=sigma,
+            beta=beta,
+        )
+        T, N = time_series.shape
+        print(f"  T={T}, N={N}, switch_times={switch_times.tolist()}")
+        _describe_lorenz(rho_vals, time_series, segment_ids)
+
+        # ------------------------------------------------------------------
+        # 2. Hand off to shared runner
+        # ------------------------------------------------------------------
+        model_path = cfg["figure_path"].replace("_alignment.png", "_model.pt").replace(".png", "_model.pt")
+
+        run_experiment(
+            cfg, time_series, switch_times, segment_ids,
+            model_path=model_path,
+            extra_checkpoint={"rho_vals": rho_vals},
+            summary_lines=[
+                f"  System                   : Lorenz-63",
+                f"  ρ per segment            : {rho_vals}",
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------

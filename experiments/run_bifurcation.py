@@ -30,6 +30,7 @@ from the repository root.
 
 import os
 import sys
+import mlflow
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -115,43 +116,51 @@ CONFIG = {
 # ---------------------------------------------------------------------------
 
 def main(cfg: dict = CONFIG):
-    system = cfg["system"]
 
-    # ------------------------------------------------------------------
-    # 1. Generate data
-    # ------------------------------------------------------------------
-    system_kwargs = {}
-    if system == "hopf" and "omega" in cfg:
-        system_kwargs["omega"] = cfg["omega"]
+    mlflow.set_tracking_uri("sqlite:////gs/home/wernery/nonstationarity_al_rnn/mlflow_test.db")
+    mlflow.set_experiment("Bifurcation")
 
-    time_series, switch_times, segment_ids = generate_switching_ode(
-        system=system,
-        param_values=cfg["param_values"],
-        segment_lengths=cfg["segment_lengths"],
-        dt=cfg["dt"],
-        warmup=cfg["warmup"],
-        noise_std=cfg["noise_std"],
-        random_seed=cfg["random_seed"],
-        **system_kwargs,
-    )
-    T, N = time_series.shape
-    print(f"Data: system={system!r}, T={T}, N={N}, "
-          f"params={cfg['param_values']}, switches at {switch_times.tolist()}")
+    with mlflow.start_run() as run:
 
-    # ------------------------------------------------------------------
-    # 2. Hand off to shared runner
-    # ------------------------------------------------------------------
-    model_path = cfg["figure_path"].replace(".png", "_model.pt")
+        mlflow.log_params(cfg)
 
-    run_experiment(
-        cfg, time_series, switch_times, segment_ids,
-        model_path=model_path,
-        extra_checkpoint={"system": system, "param_values": cfg["param_values"]},
-        summary_lines=[
-            f"  System                   : {system}",
-            f"  Params per segment       : {cfg['param_values']}",
-        ],
-    )
+        system = cfg["system"]
+
+        # ------------------------------------------------------------------
+        # 1. Generate data
+        # ------------------------------------------------------------------
+        system_kwargs = {}
+        if system == "hopf" and "omega" in cfg:
+            system_kwargs["omega"] = cfg["omega"]
+
+        time_series, switch_times, segment_ids = generate_switching_ode(
+            system=system,
+            param_values=cfg["param_values"],
+            segment_lengths=cfg["segment_lengths"],
+            dt=cfg["dt"],
+            warmup=cfg["warmup"],
+            noise_std=cfg["noise_std"],
+            random_seed=cfg["random_seed"],
+            **system_kwargs,
+        )
+        T, N = time_series.shape
+        print(f"Data: system={system!r}, T={T}, N={N}, "
+            f"params={cfg['param_values']}, switches at {switch_times.tolist()}")
+
+        # ------------------------------------------------------------------
+        # 2. Hand off to shared runner
+        # ------------------------------------------------------------------
+        model_path = cfg["figure_path"].replace(".png", "_model.pt")
+
+        run_experiment(
+            cfg, time_series, switch_times, segment_ids,
+            model_path=model_path,
+            extra_checkpoint={"system": system, "param_values": cfg["param_values"]},
+            summary_lines=[
+                f"  System                   : {system}",
+                f"  Params per segment       : {cfg['param_values']}",
+            ],
+        )
 
 
 if __name__ == "__main__":
