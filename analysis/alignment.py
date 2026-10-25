@@ -54,7 +54,7 @@ def regime_count_ratio(
     ----------
     bitcodes : ndarray of int, shape (T,)
     n_ground_truth_segments : int
-        Expected number of regimes (n_switches + 1).
+        Expected number of regimes.
 
     Returns
     -------
