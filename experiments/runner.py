@@ -53,6 +53,8 @@ def run_experiment(
     -------
     model, losses, bitcodes
     """
+    torch.manual_seed(cfg["random_seed"])
+    
     T, _         = time_series.shape
     n_segments   = len(np.unique(segment_ids)) # no need to log because segment_ids is in checkpoint
     fig_path     = cfg["figure_path"]

@@ -158,6 +158,8 @@ def main(cfg: dict = CONFIG):
 
         mlflow.log_params(cfg)
 
+        torch.manual_seed(cfg["random_seed"])
+
         study      = cfg["study"]
         subject_id = cfg["subject_id"]
 
