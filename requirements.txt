@@ -1,0 +1,10 @@
+matplotlib>=3.11
+torch
+numpy
+pandas
+mlflow
+tqdm
+statsmodels
+seaborn
+scipy
+ruptures
